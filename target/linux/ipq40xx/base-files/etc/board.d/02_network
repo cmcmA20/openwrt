@@ -137,7 +137,7 @@ ipq40xx_setup_interfaces()
 		ucidef_set_interface "wan" device "/dev/cdc-wdm0" protocol "qmi"
 		;;
 	*)
-		echo "Unsupported hardware. Network interfaces not initialized"
+		>&2 echo "Unsupported hardware. Network interfaces not initialized"
 		;;
 	esac
 }
