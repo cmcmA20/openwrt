@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
+#include <linux/minmax.h>
 
 #include "rb_lz77.h"
 
@@ -82,8 +83,10 @@ struct rb_lz77_instr_opcodes {
  * convert the bit offset to byte offset,
  * shift to modulo of bits per bytes, so that wanted bit is lsb
  * and to extract only that bit.
+ * Caller is responsible for ensuring that in_offset_bit/8
+ * does not exceed input length
  */
-static inline u8 rb_lz77_get_bit(const u8 *in, size_t in_offset_bit)
+static inline u8 rb_lz77_get_bit(const u8 *in, const size_t in_offset_bit)
 {
 	return ((in[in_offset_bit / BITS_PER_BYTE] >>
 		 (in_offset_bit % BITS_PER_BYTE)) &
@@ -96,7 +99,7 @@ static inline u8 rb_lz77_get_bit(const u8 *in, size_t in_offset_bit)
  * @in:			compressed data
  * @in_offset_bit:	bit offset to extract byte
  */
-static inline u8 rb_lz77_get_byte(const u8 *in, size_t in_offset_bit)
+static inline u8 rb_lz77_get_byte(const u8 *in, const size_t in_offset_bit)
 {
 	u8 buf = 0;
 	int i;
@@ -111,6 +114,7 @@ static inline u8 rb_lz77_get_byte(const u8 *in, size_t in_offset_bit)
  * rb_lz77_decode_count - decode bits at given offset as a count
  *
  * @in:			compressed data
+ * @in_len:		length of compressed data
  * @in_offset_bit:	bit offset where count starts
  * @shift:		left shift operand value of first count bit
  * @count:		initial count
@@ -119,11 +123,12 @@ static inline u8 rb_lz77_get_byte(const u8 *in, size_t in_offset_bit)
  *
  * Returns the decoded count
  */
-static int rb_lz77_decode_count(const u8 *in, size_t in_offset_bit, u8 shift,
-				size_t count, u8 *bits_used, u8 max_bits)
+static int rb_lz77_decode_count(const u8 *in, const size_t in_len,
+				const size_t in_offset_bit, u8 shift,
+				size_t count, u8 *bits_used, const u8 max_bits)
 {
 	size_t pos = in_offset_bit;
-	size_t max_pos = pos + max_bits;
+	const size_t max_pos = min(pos + max_bits, in_len * BITS_PER_BYTE);
 	bool up = true;
 
 	*bits_used = 0;
@@ -191,16 +196,16 @@ rb_lz77_decode_instruction(const u8 *in, size_t in_offset_bit, u8 *bits_used)
  * rb_lz77_decode_instruction_operators
  *
  * @in:			compressed data
+ * @in_len:		length of compressed data
  * @in_offset_bit:	bit offset where instruction starts
  * @previous_offset:	last used match offset
  * @opcode:		struct to hold instruction & operators
  *
  * Returns error code
  */
-static int
-rb_lz77_decode_instruction_operators(const u8 *in, size_t in_offset_bit,
-				     size_t previous_offset,
-				     struct rb_lz77_instr_opcodes *opcode)
+static int rb_lz77_decode_instruction_operators(
+	const u8 *in, const size_t in_len, const size_t in_offset_bit,
+	const size_t previous_offset, struct rb_lz77_instr_opcodes *opcode)
 {
 	enum rb_lz77_instruction instruction;
 	u8 bit_count = 0;
@@ -224,8 +229,9 @@ rb_lz77_decode_instruction_operators(const u8 *in, size_t in_offset_bit,
 		/* matching group uses previous offset */
 		offset = previous_offset;
 
-		length = rb_lz77_decode_count(in, in_offset_bit + bits_used, 0,
-					      1, &bit_count,
+		length = rb_lz77_decode_count(in, in_len,
+					      in_offset_bit + bits_used, 0, 1,
+					      &bit_count,
 					      MIKRO_LZ77_MAX_COUNT_BIT_LEN);
 		if (unlikely(length < 0))
 			return length;
@@ -234,8 +240,9 @@ rb_lz77_decode_instruction_operators(const u8 *in, size_t in_offset_bit,
 		break;
 
 	case INSTR_LONG:
-		offset = rb_lz77_decode_count(in, in_offset_bit + bits_used, 4,
-					      0, &bit_count,
+		offset = rb_lz77_decode_count(in, in_len,
+					      in_offset_bit + bits_used, 4, 0,
+					      &bit_count,
 					      MIKRO_LZ77_MAX_COUNT_BIT_LEN);
 		if (unlikely(offset < 0))
 			return offset;
@@ -246,7 +253,7 @@ rb_lz77_decode_instruction_operators(const u8 *in, size_t in_offset_bit,
 		if (offset == 0) {
 			/* non-matching long group */
 			length = rb_lz77_decode_count(
-				in, in_offset_bit + bits_used, 4, 12,
+				in, in_len, in_offset_bit + bits_used, 4, 12,
 				&bit_count, MIKRO_LZ77_MAX_COUNT_BIT_LEN);
 			if (unlikely(length < 0))
 				return length;
@@ -255,8 +262,8 @@ rb_lz77_decode_instruction_operators(const u8 *in, size_t in_offset_bit,
 		} else {
 			/* matching group */
 			length = rb_lz77_decode_count(
-				in, in_offset_bit + bits_used, 0, 2, &bit_count,
-				MIKRO_LZ77_MAX_COUNT_BIT_LEN);
+				in, in_len, in_offset_bit + bits_used, 0, 2,
+				&bit_count, MIKRO_LZ77_MAX_COUNT_BIT_LEN);
 			if (unlikely(length < 0))
 				return length;
 			/* skip bits used by length count */
@@ -323,7 +330,7 @@ int rb_lz77_decompress(const u8 *in, const size_t in_len, u8 *out,
 			goto free_lz77_struct;
 		}
 
-		rc = rb_lz77_decode_instruction_operators(in, input_bit,
+		rc = rb_lz77_decode_instruction_operators(in, in_len, input_bit,
 							  match_offset, opcode);
 		if (unlikely(rc < 0)) {
 			pr_err(MIKRO_LZ77
@@ -442,7 +449,6 @@ int rb_lz77_decompress(const u8 *in, const size_t in_len, u8 *out,
 
 free_lz77_struct:
 	kfree(opcode);
-
 	return rc;
 }
 EXPORT_SYMBOL_GPL(rb_lz77_decompress);
