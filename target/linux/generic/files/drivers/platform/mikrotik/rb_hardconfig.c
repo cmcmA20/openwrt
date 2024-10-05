@@ -522,6 +522,12 @@ static int hc_wlan_data_unpack_lzor_lz77(const u16 tag_id, const u8 *inbuf, size
 		break;
 	case RB_MAGIC_LZ77:
 		lz_type = lz77;
+		/* no known instances of lz77 without 8001/8201 data, skip SOLO */
+		if (tag_id == RB_WLAN_ERD_ID_SOLO) {
+			pr_debug(RB_HC_PR_PFX "LZ77: skipped decompress for SOLO tag\n");
+			ret = -EINVAL;
+			goto fail;
+		}
 		/* LZO-decompress lzo_len bytes of inbuf into the tempbuf */
 		ret = rb_lz77_decompress(inbuf, inlen, tempbuf, &templen);
 		if (ret) {
@@ -545,7 +551,7 @@ static int hc_wlan_data_unpack_lzor_lz77(const u16 tag_id, const u8 *inbuf, size
 	needle = (const u32 *)tempbuf;
 	while (RB_MAGIC_ERD != *needle++) {
 		if ((u8 *)needle >= tempbuf+templen) {
-			pr_debug(RB_HC_PR_PFX "%s: ERD magic not found\n", lz_type);
+			pr_warn(RB_HC_PR_PFX "%s: ERD magic not found. Decompressed first word: 0x%08x\n", lz_type, *(u32 *)tempbuf);
 			ret = -ENODATA;
 			goto fail;
 		}
