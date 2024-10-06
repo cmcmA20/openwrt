@@ -13,9 +13,6 @@
 
 #define MIKRO_LZ77 "[rb lz77] "
 
-/* examples have all decompressed to start with DRE\x00 */
-#define MIKRO_LZ77_EXPECTED_OUT (('E' << 16) | ('R' << 8) | ('D'))
-
 /*
  * The maximum number of bits used in a counter.
  * For the look behind window, long instruction match offsets
@@ -137,6 +134,9 @@ static int rb_lz77_decode_count(const u8 *in, const size_t in_len,
 		 in_offset_bit, shift, count);
 
 	while (true) {
+		/* check the input offset bit does not overflow the minimum of
+		 * a reasonable length for this encoded count, and
+		 * the end of the input */
 		if (unlikely(pos >= max_pos)) {
 			pr_err(MIKRO_LZ77
 			       "max bit index reached before count completed\n");
@@ -369,18 +369,6 @@ int rb_lz77_decompress(const u8 *in, const size_t in_len, u8 *out,
 						rb_lz77_get_byte(in, input_bit);
 					++output_ptr;
 					input_bit += BITS_PER_BYTE;
-
-					/* test first 4 bytes matches expected */
-					if (unlikely(
-						    (output_ptr - out) == 4 &&
-						    !(*(u32 *)out ==
-						      MIKRO_LZ77_EXPECTED_OUT))) {
-						pr_err(MIKRO_LZ77
-						       "unexpected output first word: 0x%08x\n",
-						       *(u32 *)out);
-						rc = -EILSEQ;
-						goto free_lz77_struct;
-					}
 				}
 				/* do no fallthrough if a non-match group */
 				break;
